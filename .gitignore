@@ -1,0 +1,30 @@
+# --- Rust Build Artifacts ---
+/target
+**/*.rs.bk
+
+# --- Urchin Specific ---
+# The embedded Sled database (local state)
+urchin_db/
+
+# --- Security & Config ---
+# Never commit your tokens
+.env
+.env.local
+
+# --- IDEs & Editors ---
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# IntelliJ / JetBrains
+.idea/
+*.iml
+
+# Vim / Emacs
+*.swp
+*~
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
