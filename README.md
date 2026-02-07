@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="logo.svg" alt="URCHIN" width="450" />
+  <img src="logo.svg" alt="URCHIN" width="200" />
 
   <br />
 
