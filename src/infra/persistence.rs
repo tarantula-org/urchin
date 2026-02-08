@@ -36,4 +36,11 @@ impl BanRepository for SledRepository {
             Ok(None)
         }
     }
+
+    async fn delete_proposal(&self, target_id: &str) -> anyhow::Result<()> {
+        let key = target_id.as_bytes();
+        self.tree.remove(key)?;
+        self.tree.flush_async().await?;
+        Ok(())
+    }
 }

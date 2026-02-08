@@ -1,22 +1,25 @@
 use async_trait::async_trait;
 use teloxide::prelude::*;
-use crate::domain::ports::PlatformNotifier;
+use crate::domain::ports::{PlatformNotifier, BanProposal};
 
 pub struct TelegramAdapter {
     _bot: Bot,
 }
 
 impl TelegramAdapter {
-    pub async fn new(_token: &str) -> anyhow::Result<Self> {
-        let bot = Bot::from_env(); 
+    pub async fn new(token: &str) -> anyhow::Result<Self> {
+        let bot = Bot::new(token); 
         Ok(Self { _bot: bot })
     }
 }
 
 #[async_trait]
 impl PlatformNotifier for TelegramAdapter {
-    async fn broadcast_alert(&self, message: &str) -> anyhow::Result<()> {
-        println!("[Telegram] {}", message);
+    async fn notify_proposal(&self, _proposal: &BanProposal) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn execute_action(&self, _proposal: &BanProposal, _approver: &str) -> anyhow::Result<()> {
         Ok(())
     }
 }
