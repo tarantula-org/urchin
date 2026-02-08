@@ -1,0 +1,17 @@
+services:
+  urchin:
+    build: .
+    container_name: urchin_bot
+    restart: unless-stopped
+    
+    # Map the database folder to the host so data persists
+    volumes:
+      - ./urchin_db:/app/urchin_db
+
+    # Load environment variables directly from your existing .env file
+    env_file:
+      - .env
+
+    # Or you can override them manually here
+    environment:
+      - RUST_LOG=info

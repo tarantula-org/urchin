@@ -1,0 +1,4 @@
+target/
+urchin_db/
+.git/
+.env
