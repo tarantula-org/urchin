@@ -43,3 +43,48 @@ Urchin is **Open Source (AGPLv3)**. Network-accessible modifications must be pub
 | **Managed** | <img src="https://img.shields.io/badge/Service-Tarantula_Tech-e67e22?style=flat" /> SLA-backed deployment, zero-config consensus, and priority support. |
 
 [![Deploy on Tarantula](https://img.shields.io/badge/DEPLOY-MANAGED_INSTANCE-18181b?style=for-the-badge&logo=rust&logoColor=white&labelColor=e67e22)](https://tarantula.tech/urchin)
+
+## <img src="https://cdn.simpleicons.org/blueprint/d63031" width="24" style="vertical-align: bottom;" /> Operation & Workflow
+
+Urchin enforces **Two-Person Integrity (TPI)**. No single staff member can unilaterally ban or kick a user. The workflow requires two distinct identities: a **Requester** and an **Approver**.
+
+### 1. The Request (Requester)
+A staff member initiates a governance action using Slash Commands.
+
+* **Ban:** `/ban [user] [reason]`
+* **Kick:** `/kick [user] [reason]`
+
+> **Result:** Urchin does *not* execute the action immediately. Instead, it generates a **Governance Proposal Embed** in the channel, detailing the target and the reason.
+
+### 2. The Consensus (Approver)
+A *different* staff member must review the proposal.
+
+* **Action:** Click the **[Confirm]** button on the embed.
+* **Constraint:** The **Requester cannot be the Approver**. If the requester tries to click the button, the system will reject the action with a `Self-approval not allowed` error.
+
+### 3. Execution & Audit
+Once consensus is reached (2/2 signatures), Urchin immediately:
+1.  **Executes** the ban or kick on the platform.
+2.  **Logs** the action in the platform's Audit Log with a signed reason:
+    `"Spamming | Req: Staff_A | App: Staff_B"`
+3.  **Clean Up:** Removes the proposal from the active state to prevent double-jeopardy.
+
+---
+
+## <img src="https://cdn.simpleicons.org/github/333333" width="24" style="vertical-align: bottom;" /> Configuration
+
+Urchin is stateless and configured via environment variables.
+
+| Variable | Description |
+| :--- | :--- |
+| `DISCORD_TOKEN` | Your Bot Token from the Developer Portal. |
+| `DISCORD_GUILD_ID` | The Server ID where commands are registered. |
+| `DISCORD_STAFF_ROLE_ID` | The specific Role ID allowed to use commands. |
+| `RUST_LOG` | Logging level (default: `info`). |
+
+```bash
+# Example .env
+DISCORD_TOKEN=OTk5...
+DISCORD_GUILD_ID=1234567890
+DISCORD_STAFF_ROLE_ID=9876543210
+```
