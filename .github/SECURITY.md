@@ -7,7 +7,6 @@ We take the security of the Urchin consensus engine seriously. If you discover a
 **DO NOT** open public issues for sensitive security exploits.
 
 * **Email:** `urchin.tarantula.tech@atomicmail.io`
-* **PGP Key:** (Optional: Add if you have one, otherwise remove this line)
 * **Response Time:** We aim to acknowledge receipt within 48 hours.
 
 ---
