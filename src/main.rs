@@ -2,7 +2,10 @@ mod domain;
 mod infra;
 
 use std::sync::Arc;
+use std::env;
 use anyhow::Result;
+use dotenvy::dotenv; // Load .env
+
 use infra::discord::DiscordAdapter;
 use infra::telegram::TelegramAdapter;
 use infra::persistence::SledRepository;
@@ -11,12 +14,24 @@ use domain::ports::PlatformNotifier;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 1. Adapters (Infrastructure)
-    let discord = DiscordAdapter::new("TOKEN").await?;
-    let telegram = TelegramAdapter::new("TOKEN").await?;
+    // 1. Load Secrets
+    dotenv().ok(); // Ignore error if .env is missing (e.g. in prod)
+    
+    let discord_token = env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN must be set");
+    let discord_channel_id = env::var("DISCORD_CHANNEL_ID")
+        .expect("DISCORD_CHANNEL_ID must be set")
+        .parse::<u64>()
+        .expect("Invalid Channel ID");
+
+    // 2. Adapters
+    // Pass the channel ID to the adapter
+    let discord = DiscordAdapter::new(&discord_token, discord_channel_id).await?;
+    
+    // For Telegram, we keep the stub for now (or add a dummy token)
+    let telegram = TelegramAdapter::new("dummy_token").await?;
     let db = SledRepository::new("./urchin_db")?;
 
-    // 2. Wiring (Dependency Injection)
+    // 3. Wiring
     let notifiers: Vec<Arc<dyn PlatformNotifier>> = vec![
         Arc::new(discord),
         Arc::new(telegram),
@@ -26,12 +41,11 @@ async fn main() -> Result<()> {
 
     println!("Urchin Nucleus Active.");
 
-    // 3. Execution (Integration Test)
-    let target = "User_123";
-    let admin = "Admin_Acrilic";
-
-    engine.request_ban(target, admin).await?;
-    engine.check_ban_status(target).await?;
+    // 4. Live Test
+    println!("--- Sending Test Alert to Discord ---");
+    
+    // This will now cause your Discord Bot to actually post in the channel!
+    engine.request_ban("User_Test_123", "Admin_Acrilic").await?;
 
     Ok(())
 }
