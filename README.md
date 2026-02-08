@@ -4,9 +4,7 @@
 
   <br />
 
-  **Universal Runtime for Consensus & Hybrid Integration Networks**
-
-  <br />
+  <h1> URCHIN <br>
   <br />
 
   <img src="https://img.shields.io/badge/License-AGPL_v3-343a40?style=for-the-badge" alt="License" />
