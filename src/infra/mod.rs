@@ -1,3 +1,3 @@
 pub mod discord;
-pub mod telegram;
 pub mod persistence;
+pub mod stoat;

@@ -4,19 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# --- Runtime ---
 tokio = { version = "1.36", features = ["full"] }
 anyhow = "1.0"
-async-trait = "0.1" # Essential for async traits in DI
-tracing = "0.1"     # Structured logging
+async-trait = "0.1" 
+tracing = "0.1"     
 tracing-subscriber = "0.3"
 
-# --- Spikes (Adapters) ---
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }
-teloxide = { version = "0.12", features = ["macros"] }
 
-# --- Shell (Persistence) ---
-sled = "0.34"       # Embedded DB
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+sled = "0.34"       
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dotenvy = "0.15.7"

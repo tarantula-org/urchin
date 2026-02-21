@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/License-AGPL_v3-343a40?style=for-the-badge" alt="License" />
   <img src="https://img.shields.io/badge/Core-Rust-b7410e?style=for-the-badge&logo=rust&logoColor=white" alt="Language" />
   <img src="https://img.shields.io/badge/Adapter-Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" />
-  <img src="https://img.shields.io/badge/Adapter-Telegram-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram" />
+  <img src="https://img.shields.io/badge/Adapter-Stoat-FF4654?style=for-the-badge&logoColor=white" alt="Stoat" />
 
 </div>
 
@@ -20,7 +20,7 @@
 
 **URCHIN** is a platform-agnostic consensus engine enforcing **Two-Person Integrity (TPI)**.
 
-It decouples governance decisions from execution. Operating as a centralized async kernel, Urchin ingests requests from disparate front-ends (Discord, Telegram) and holds them in a suspended state. Actions execute only after ratification by a second, distinct authorized identity.
+It decouples governance decisions from execution. Operating as a centralized async kernel, Urchin ingests requests from disparate front-ends (Discord, Stoat) and holds them in a suspended state. Actions execute only after ratification by a second, distinct authorized identity.
 
 ## <img src="https://cdn.simpleicons.org/polywork/e67e22" width="24" style="vertical-align: bottom;" /> Architecture
 
@@ -30,7 +30,7 @@ The system follows a "Spoke-and-Hub" topology, isolating core consensus logic fr
 | :--- | :--- | :--- |
 | **Nucleus** | <img src="https://img.shields.io/badge/Tokio-18181b?style=flat&logo=rust&logoColor=white" /> | **State Machine.** Handles TPI validation, identity resolution, and atomic audit logging. |
 | **Spike: Discord** | <img src="https://img.shields.io/badge/Serenity-5865F2?style=flat&logo=discord&logoColor=white" /> | **Transport.** Manages Gateway intents, interactions, and strict role hierarchy checks. |
-| **Spike: Telegram** | <img src="https://img.shields.io/badge/Teloxide-26A5E4?style=flat&logo=telegram&logoColor=white" /> | **Transport.** Functional dispatch pipeline for command parsing and chat verification. |
+| **Spike: Stoat** | <img src="https://img.shields.io/badge/Mutiny-FF4654?style=flat" /> | **Transport.** Reaction-based state resolution and structural correlation pipeline. |
 | **Shell** | <img src="https://img.shields.io/badge/Sled-b7410e?style=flat&logo=sqlite&logoColor=white" /> | **Persistence.** Embedded, lock-free structured storage for state recovery. |
 
 ## <img src="https://cdn.simpleicons.org/github/333333" width="24" style="vertical-align: bottom;" /> Distribution
@@ -49,18 +49,19 @@ Urchin is **Open Source (AGPLv3)**. Network-accessible modifications must be pub
 Urchin enforces **Two-Person Integrity (TPI)**. No single staff member can unilaterally ban or kick a user. The workflow requires two distinct identities: a **Requester** and an **Approver**.
 
 ### 1. The Request (Requester)
-A staff member initiates a governance action using Slash Commands.
+A staff member initiates a governance action.
 
-* **Ban:** `/ban [user] [reason]`
-* **Kick:** `/kick [user] [reason]`
+* **Discord:** `/ban [user] [reason]`
+* **Stoat:** Triggered via internal dashboard linking to the adapter.
 
 > **Result:** Urchin does *not* execute the action immediately. Instead, it generates a **Governance Proposal Embed** in the channel, detailing the target and the reason.
 
 ### 2. The Consensus (Approver)
 A *different* staff member must review the proposal.
 
-* **Action:** Click the **[Confirm]** button on the embed.
-* **Constraint:** The **Requester cannot be the Approver**. If the requester tries to click the button, the system will reject the action with a `Self-approval not allowed` error.
+* **Discord Action:** Click the **[Confirm]** button on the embed.
+* **Stoat Action:** React with ✅ on the bot's proposal message.
+* **Constraint:** The **Requester cannot be the Approver**. If the requester tries to approve, the system will reject the action with a `Self-approval not allowed` error.
 
 ### 3. Execution & Audit
 Once consensus is reached (2/2 signatures), Urchin immediately:
@@ -80,6 +81,9 @@ Urchin is stateless and configured via environment variables.
 | `DISCORD_TOKEN` | Your Bot Token from the Developer Portal. |
 | `DISCORD_GUILD_ID` | The Server ID where commands are registered. |
 | `DISCORD_STAFF_ROLE_ID` | The specific Role ID allowed to use commands. |
+| `STOAT_TOKEN` | Your Stoat integration token. |
+| `STOAT_CHANNEL_ID` | The dedicated channel ID for proposal rendering. |
+| `STOAT_STAFF_ROLE_ID` | The required role ID to issue a valid ✅ reaction. |
 | `RUST_LOG` | Logging level (default: `info`). |
 
 ```bash
@@ -87,4 +91,7 @@ Urchin is stateless and configured via environment variables.
 DISCORD_TOKEN=OTk5...
 DISCORD_GUILD_ID=1234567890
 DISCORD_STAFF_ROLE_ID=9876543210
+STOAT_TOKEN=st_...
+STOAT_CHANNEL_ID=proposal_channel
+STOAT_STAFF_ROLE_ID=staff_group
 ```
