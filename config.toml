@@ -1,0 +1,6 @@
+# config.toml
+# Required number of staff approvals before an action executes
+required_approvals = 1
+
+# Command prefix for non-Discord platforms (e.g., Stoat)
+command_prefix = "/"

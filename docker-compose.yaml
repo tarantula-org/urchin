@@ -4,14 +4,20 @@ services:
     container_name: urchin_bot
     restart: unless-stopped
     
-    # Map the database folder to the host so data persists
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    user: "urchin_user"
+    
     volumes:
+      # Map database with read/write access
       - ./urchin_db:/app/urchin_db
+      # Mount config directly to allow host modifications without rebuilds
+      - ./config.toml:/app/config.toml:ro
 
-    # Load environment variables directly from your existing .env file
     env_file:
       - .env
 
-    # Or you can override them manually here
     environment:
       - RUST_LOG=info

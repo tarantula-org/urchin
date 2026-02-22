@@ -1,48 +1,30 @@
 # STAGE 1: Builder
-FROM rust:1-slim-bookworm as builder
+FROM rust:alpine AS builder
 
-# Install build-time dependencies for OpenSSL
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev
 
 WORKDIR /usr/src/urchin
 COPY . .
 
-# Build the release binary
 RUN cargo build --release
 
 # STAGE 2: Runtime
-FROM debian:bookworm-slim
+FROM alpine:latest
 
-# Install runtime dependencies
-# ca-certificates is CRITICAL for fixing the Stoat SSL "invalid peer certificate" error
-RUN apt-get update && apt-get install -y \
-    openssl \
-    libssl3 \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# ca-certificates and openssl are required for Stoat's native-tls handshake
+RUN apk add --no-cache openssl ca-certificates && \
+    addgroup -S urchin && \
+    adduser -S urchin_user -G urchin
 
-# Create a non-root user
-RUN useradd -ms /bin/bash urchin_user
-
-# Set up the application directory
 WORKDIR /app
 
-# Copy the binary from the builder stage
+# Copy binary and configuration from builder
 COPY --from=builder /usr/src/urchin/target/release/urchin /app/urchin
+COPY --from=builder /usr/src/urchin/config.toml /app/config.toml
 
-# 1. Create the database directory as ROOT
-# 2. Change ownership to the non-root user
-# 3. This ensures Sled can write to the DB without permission errors
-RUN mkdir -p /app/urchin_db && chown -R urchin_user:urchin_user /app
+# Set up persistence layer permissions
+RUN mkdir -p /app/urchin_db && chown -R urchin_user:urchin /app
 
-# Switch to the non-root user for security
 USER urchin_user
 
-# Ensure the database path environment variable (if used) matches the volume
-ENV DATABASE_PATH=/app/urchin_db
-
-# Run the kernel
 CMD ["./urchin"]
