@@ -1,202 +1,113 @@
-use ::std::collections::HashMap;
-use ::std::sync::Arc;
-use ::anyhow::{Context, Result};
-use ::async_trait::async_trait;
-use ::tokio::sync::{mpsc, RwLock};
-use ::tracing::{error, info};
+use crate::domain::{models::*, ports::*};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
+use serde_json::{json, Value};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{mpsc, RwLock};
 
-use ::reqwest::Client as HttpClient;
-use ::serde_json::{json, Value};
-use ::tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use ::futures_util::{SinkExt, StreamExt};
-
-use crate::domain::ports::{BanProposal, PlatformNotifier, UrchinEvent, Platform};
-
-pub struct StoatAdapter {
-    http: HttpClient,
-    token: ::std::string::String,
-    log_channel_id: ::std::string::String,
-    active_proposals: Arc<RwLock<HashMap<::std::string::String, ::std::string::String>>>,
+pub struct Stoat {
+    http: Client,
+    token: String,
+    log: String,
+    props: Arc<RwLock<HashMap<String, String>>>,
 }
 
-unsafe impl Send for StoatAdapter {}
-unsafe impl Sync for StoatAdapter {}
-
-impl StoatAdapter {
-    pub async fn new(
-        token: &str,
-        log_channel_id: ::std::string::String,
-        staff_role_id: ::std::string::String,
-        tx: mpsc::Sender<UrchinEvent>,
-    ) -> Result<Self> {
-        let http = HttpClient::builder().build().context("Failed to build reqwest client")?;
-        let active_proposals = Arc::new(RwLock::new(HashMap::<::std::string::String, ::std::string::String>::new()));
+impl Stoat {
+    pub async fn new(token: &str, log: &str, staff: &str, tx: mpsc::Sender<Event>) -> Result<Self> {
+        let http = Client::builder().user_agent("Urchin/0.1.0").danger_accept_invalid_certs(true).build()?;
+        let props = Arc::new(RwLock::new(HashMap::new()));
         
-        let token_clone = token.to_string();
-        let proposals_clone = Arc::clone(&active_proposals);
-        let http_clone = http.clone();
-        
-        ::tokio::spawn(async move {
+        let (tk, ht, st, pr, txc) = (token.to_string(), http.clone(), staff.to_string(), props.clone(), tx);
+        tokio::spawn(async move {
             loop {
-                let ws_url = "wss://ws.revolt.chat?version=1&format=json";
-                
-                match connect_async(ws_url).await {
-                    Ok((ws_stream, _)) => {
-                        info!("Connected to Stoat WebSocket Gateway");
-                        let (mut write, mut read) = ws_stream.split();
-                        
-                        let auth_payload = json!({
-                            "type": "Authenticate",
-                            "token": token_clone
-                        }).to_string();
-
-                        if let Err(e) = write.send(Message::Text(auth_payload)).await {
-                            error!("Failed to authenticate on Stoat WS: {}", e);
-                            ::tokio::time::sleep(::std::time::Duration::from_secs(5)).await;
-                            continue;
-                        }
-
-                        let mut ping_interval = ::tokio::time::interval(::std::time::Duration::from_secs(15));
-                        
-                        loop {
-                            ::tokio::select! {
-                                _ = ping_interval.tick() => {
-                                    let ping = json!({"type": "Ping", "data": 0}).to_string();
-                                    if write.send(Message::Text(ping)).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                msg_opt = read.next() => {
-                                    match msg_opt {
-                                        Some(Ok(Message::Text(text))) => {
-                                            if let Ok(parsed) = ::serde_json::from_str::<Value>(&text) {
-                                                if parsed["type"] == "MessageReact" {
-                                                    let emoji = parsed["emoji_id"].as_str().unwrap_or("");
-                                                    let user_id = parsed["user_id"].as_str().unwrap_or("");
-                                                    let message_id = parsed["id"].as_str().unwrap_or("");
-                                                    let channel_id = parsed["channel_id"].as_str().unwrap_or("");
-                                                    
-                                                    if emoji.contains("✅") {
-                                                        if let Ok(ch_res) = http_clone.get(format!("https://api.revolt.chat/channels/{}", channel_id))
-                                                            .header("x-bot-token", &token_clone).send().await {
-                                                            
-                                                            if let Ok(ch_data) = ch_res.json::<Value>().await {
-                                                                if let Some(server_id) = ch_data["server"].as_str() {
-                                                                    if let Ok(m_res) = http_clone.get(format!("https://api.revolt.chat/servers/{}/members/{}", server_id, user_id))
-                                                                        .header("x-bot-token", &token_clone).send().await {
-                                                                        
-                                                                        if let Ok(member) = m_res.json::<Value>().await {
-                                                                            let roles = member["roles"].as_array();
-                                                                            let has_role = roles.is_some_and(|r| r.iter().any(|v| v.as_str() == Some(&staff_role_id)));
-                                                                            
-                                                                            if !has_role {
-                                                                                info!(user_id = %user_id, "Unauthorized approval attempt rejected.");
-                                                                                continue;
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-
-                                                        let map = proposals_clone.read().await;
-                                                        if let Some(target) = map.get(message_id) {
-                                                            let _ = tx.send(UrchinEvent::ConfirmAction {
-                                                                target: target.clone(),
-                                                                approver: user_id.to_string(),
-                                                            }).await;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Some(Ok(_)) => {}, 
-                                        Some(Err(e)) => {
-                                            error!("Stoat WS stream error: {}", e);
-                                            break;
-                                        }
-                                        None => {
-                                            info!("Stoat WS stream closed by gateway");
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => error!("Failed to establish Stoat WebSocket connection: {}", e),
-                }
-
-                error!("Stoat connection lost. Reconnecting in 5 seconds...");
-                ::tokio::time::sleep(::std::time::Duration::from_secs(5)).await;
+                if let Err(e) = Self::listen(&ht, &tk, &st, &txc, &pr).await { tracing::error!("Stoat WS: {}", e); }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         });
 
-        Ok(Self {
-            http,
-            token: token.to_string(),
-            log_channel_id,
-            active_proposals,
-        })
+        Ok(Self { http, token: token.into(), log: log.into(), props })
+    }
+
+    async fn listen(http: &Client, tk: &str, staff: &str, tx: &mpsc::Sender<Event>, props: &Arc<RwLock<HashMap<String, String>>>) -> Result<()> {
+        let tls = native_tls::TlsConnector::builder().danger_accept_invalid_certs(true).build()?;
+        let (ws, _) = tokio_tungstenite::connect_async_tls_with_config("wss://stoat.chat/events", None, false, Some(tokio_tungstenite::Connector::NativeTls(tls))).await?;
+        let (mut w, mut r) = ws.split();
+
+        w.send(tokio_tungstenite::tungstenite::Message::Text(json!({"type": "Authenticate", "token": tk}).to_string())).await?;
+        let mut hb = tokio::time::interval(std::time::Duration::from_secs(20));
+
+        loop {
+            tokio::select! {
+                _ = hb.tick() => { w.send(tokio_tungstenite::tungstenite::Message::Text(json!({"type": "Ping", "data": 0}).to_string())).await?; }
+                msg = r.next() => {
+                    let text = msg.context("WS End")??.into_text()?;
+                    let pl: Value = serde_json::from_str(&text)?;
+                    match pl["type"].as_str() {
+                        Some("Authenticated") => { w.send(tokio_tungstenite::tungstenite::Message::Text(json!({"type": "UpdateUser", "data": {"status": {"presence": "Online"}}}).to_string())).await?; }
+                        Some("MessageReact") => { Self::on_react(&pl, http, tk, staff, tx, props).await?; }
+                        Some("Message") => { Self::on_msg(&pl, tx).await?; }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    async fn on_msg(pl: &Value, tx: &mpsc::Sender<Event>) -> Result<()> {
+        let content = pl["content"].as_str().unwrap_or("");
+        let parts: Vec<&str> = content.split_whitespace().collect();
+        if parts.len() >= 3 && parts[0].starts_with('!') {
+            let action = parts[0][1..].to_string();
+            let target = parts[1].to_string();
+            let reason = parts[2..].join(" ");
+            let author = pl["author"].as_str().unwrap_or("?").into();
+            let channel = pl["channel"].as_str().unwrap_or("?").into();
+            
+            tx.send(Event::Propose { action, target, author, origin: Platform::Stoat, channel, reason }).await?;
+        }
+        Ok(())
+    }
+
+    async fn on_react(pl: &Value, http: &Client, tk: &str, staff: &str, tx: &mpsc::Sender<Event>, props: &Arc<RwLock<HashMap<String, String>>>) -> Result<()> {
+        if !pl["emoji_id"].as_str().is_some_and(|e| e.contains('✅')) { return Ok(()); }
+        let uid = pl["user_id"].as_str().context("Missing user_id")?;
+        let mid = pl["id"].as_str().context("Missing id")?;
+        let cid = pl["channel_id"].as_str().context("Missing channel_id")?;
+        
+        let chan: Value = http.get(format!("https://stoat.chat/api/channels/{}", cid)).header("x-bot-token", tk).send().await?.json().await?;
+        let sid = chan["server"].as_str().context("No server found")?;
+        let mem: Value = http.get(format!("https://stoat.chat/api/servers/{}/members/{}", sid, uid)).header("x-bot-token", tk).send().await?.json().await?;
+        
+        if mem["roles"].as_array().is_some_and(|r| r.iter().any(|v| v.as_str() == Some(staff))) {
+            if let Some(target) = props.read().await.get(mid) {
+                tx.send(Event::Approve { target: target.clone(), approver: uid.into() }).await?;
+            }
+        }
+        Ok(())
     }
 }
 
 #[async_trait]
-impl PlatformNotifier for StoatAdapter {
-    async fn notify_proposal(&self, proposal: &BanProposal) -> Result<()> {
-        let channel = if proposal.origin_platform == Platform::Stoat {
-            &proposal.origin_channel_id
-        } else {
-            &self.log_channel_id
-        };
-
-        let payload = format!(
-            "**TPI Action Required:**\nTarget: {}\nReason: {}\nOrigin: {:?}\n\n_React with ✅ to approve._", 
-            proposal.target_id, 
-            proposal.reason,
-            proposal.origin_platform
-        );
+impl Driver for Stoat {
+    async fn notify(&self, p: &Proposal) -> Result<()> {
+        let ch = if p.origin == Platform::Stoat { &p.channel } else { &self.log };
+        let target_display = p.target.stoat.as_deref().unwrap_or(&p.target.raw);
+        let msg = format!("**TPI {} Proposal**\nTarget: {}\nReq: {}\nReason: {}\n_React ✅_", p.action, target_display, p.author, p.reason);
+        let res: Value = self.http.post(format!("https://stoat.chat/api/channels/{}/messages", ch)).header("x-bot-token", &self.token).json(&json!({"content": msg})).send().await?.json().await?;
         
-        let res = self.http.post(format!("https://api.revolt.chat/channels/{}/messages", channel))
-            .header("x-bot-token", &self.token)
-            .json(&json!({"content": payload}))
-            .send()
-            .await?;
-
-        if let Ok(body) = res.json::<Value>().await {
-            if let Some(msg_id) = body["_id"].as_str() {
-                let _ = self.http.put(format!("https://api.revolt.chat/channels/{}/messages/{}/reactions/✅", channel, msg_id))
-                    .header("x-bot-token", &self.token)
-                    .send()
-                    .await;
-
-                self.active_proposals.write().await.insert(msg_id.to_string(), proposal.target_id.clone());
-            }
+        if let Some(id) = res["_id"].as_str() {
+            self.http.put(format!("https://stoat.chat/api/channels/{}/messages/{}/reactions/✅", ch, id)).header("x-bot-token", &self.token).send().await?;
+            self.props.write().await.insert(id.into(), p.target.raw.clone());
         }
-        
         Ok(())
     }
 
-    async fn execute_action(&self, proposal: &BanProposal, approver: &str) -> Result<()> {
-        let channel = if proposal.origin_platform == Platform::Stoat {
-            &proposal.origin_channel_id
-        } else {
-            &self.log_channel_id
-        };
-
-        let payload = format!(
-            "**Action Executed:**\nTarget: {} handled by {} (Approved by {})", 
-            proposal.target_id, 
-            proposal.requester_id, 
-            approver
-        );
-        
-        let _ = self.http.post(format!("https://api.revolt.chat/channels/{}/messages", channel))
-            .header("x-bot-token", &self.token)
-            .json(&json!({"content": payload}))
-            .send()
-            .await;
-            
+    async fn execute(&self, p: &Proposal, app: &str) -> Result<()> {
+        let ch = if p.origin == Platform::Stoat { &p.channel } else { &self.log };
+        let msg = format!("✅ Executed {} on {} (App: {})", p.action, p.target.raw, app);
+        self.http.post(format!("https://stoat.chat/api/channels/{}/messages", ch)).header("x-bot-token", &self.token).json(&json!({"content": msg})).send().await?;
         Ok(())
     }
 }

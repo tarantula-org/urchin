@@ -1,56 +1,42 @@
 mod domain;
 mod infra;
 
-use ::std::sync::Arc;
-use ::std::env;
-use ::anyhow::{Context, Result};
-use ::dotenvy::dotenv;
-use ::tokio::sync::mpsc;
-
-use infra::discord::DiscordAdapter;
-use infra::stoat::StoatAdapter;
-use infra::persistence::SledRepository;
-use domain::services::ConsensusService;
-use domain::ports::{PlatformNotifier, UrchinEvent};
+use domain::{engine::Core, models::Event, ports::Driver};
+use infra::{discord::Discord, stoat::Stoat, store::SledStore};
+use std::{env, sync::Arc};
+use tokio::sync::mpsc;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let _ = dotenv().ok();
-    
-    let (tx, mut rx) = mpsc::channel::<UrchinEvent>(100);
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    tracing_subscriber::fmt::init();
 
-    let discord_token = env::var("DISCORD_TOKEN").context("DISCORD_TOKEN missing")?;
-    let discord_guild_id = env::var("DISCORD_GUILD_ID")?.parse::<u64>()?;
-    let discord_staff_role = env::var("DISCORD_STAFF_ROLE_ID")?.parse::<u64>()?;
-    let discord_log_channel = env::var("DISCORD_LOG_CHANNEL_ID")?.parse::<u64>()?;
-    
-    let discord = DiscordAdapter::new(&discord_token, discord_guild_id, discord_staff_role, discord_log_channel, tx.clone()).await?;
+    // Explicitly dictate the Event type to prevent serenity from hijacking the namespace
+    let (tx, mut rx) = mpsc::channel::<Event>(100);
+    let store = Arc::new(SledStore::new("./urchin_db")?);
 
-    let stoat_token = env::var("STOAT_TOKEN").context("STOAT_TOKEN missing")?;
-    let stoat_log_channel = env::var("STOAT_LOG_CHANNEL_ID").context("STOAT_LOG_CHANNEL_ID missing")?;
-    let stoat_staff_role = env::var("STOAT_STAFF_ROLE_ID").context("STOAT_STAFF_ROLE_ID missing")?;
-    
-    let stoat = StoatAdapter::new(&stoat_token, stoat_log_channel, stoat_staff_role, tx).await?;
+    let discord = Arc::new(Discord::new(
+        &env::var("DISCORD_TOKEN")?,
+        env::var("DISCORD_GUILD_ID")?.parse()?,
+        env::var("DISCORD_STAFF_ROLE_ID")?.parse()?,
+        env::var("DISCORD_LOG_CHANNEL_ID")?.parse()?,
+        tx.clone()
+    ).await?) as Arc<dyn Driver>;
 
-    let db = SledRepository::new("./urchin_db")?;
+    let stoat = Arc::new(Stoat::new(
+        &env::var("STOAT_TOKEN")?,
+        &env::var("STOAT_LOG_CHANNEL_ID")?,
+        &env::var("STOAT_STAFF_ROLE_ID")?,
+        tx.clone()
+    ).await?) as Arc<dyn Driver>;
 
-    let notifiers: ::std::vec::Vec<Arc<dyn PlatformNotifier>> = vec![
-        Arc::new(discord) as Arc<dyn PlatformNotifier>,
-        Arc::new(stoat) as Arc<dyn PlatformNotifier>,
-    ];
+    let core = Core::new(store, vec![discord, stoat]);
 
-    let engine = ConsensusService::new(Arc::new(db), notifiers);
-
-    while let Some(event) = rx.recv().await {
-        match event {
-            UrchinEvent::RequestAction { kind, target, requester, origin_platform, origin_channel_id, reason } => {
-                let _ = engine.request_action(&kind, &target, &requester, origin_platform, &origin_channel_id, &reason).await;
-            }
-            UrchinEvent::ConfirmAction { target, approver } => {
-                let _ = engine.confirm_action(&target, &approver).await;
-            }
+    while let Some(ev) = rx.recv().await {
+        if let Err(e) = core.run(ev).await {
+            tracing::error!("Kernel Exception: {:#}", e);
         }
     }
-
+    
     Ok(())
 }

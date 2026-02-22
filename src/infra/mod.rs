@@ -1,3 +1,3 @@
 pub mod discord;
-pub mod persistence;
 pub mod stoat;
+pub mod store;
