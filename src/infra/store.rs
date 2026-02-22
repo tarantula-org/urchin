@@ -21,9 +21,7 @@ impl StateStore for SledStore {
         if let Some(v) = self.0.get(target)? {
             match ::serde_json::from_slice(&v) {
                 Ok(p) => return Ok(Some(p)),
-                Err(_) => {
-                    let _ = self.0.remove(target);
-                }
+                Err(_) => { let _ = self.0.remove(target); }
             }
         }
         Ok(None)
@@ -37,14 +35,10 @@ impl StateStore for SledStore {
     
     async fn list(&self) -> Result<::std::vec::Vec<Proposal>> {
         let mut res = ::std::vec::Vec::new();
-        for r in self.0.iter() {
-            if let Ok((k, v)) = r {
-                match ::serde_json::from_slice(&v) {
-                    Ok(p) => res.push(p),
-                    Err(_) => {
-                        let _ = self.0.remove(&k);
-                    }
-                }
+        for (k, v) in self.0.iter().flatten() {
+            match ::serde_json::from_slice(&v) {
+                Ok(p) => res.push(p),
+                Err(_) => { let _ = self.0.remove(&k); }
             }
         }
         Ok(res)

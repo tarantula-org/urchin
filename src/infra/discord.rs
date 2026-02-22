@@ -42,12 +42,14 @@ impl EventHandler for Handler {
                 let _ = cmd.create_response(&ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("⏳ Proposed.").ephemeral(true))).await;
             }
             Interaction::Component(cmd) => {
+                let mut msg = cmd.message.clone();
                 if let Some(target) = cmd.data.custom_id.strip_prefix("ok:") {
                     let _ = self.tx.send(AppEvent::Approve { target: target.into(), approver: author }).await;
                     let _ = cmd.create_response(&ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("✅ Processing...").ephemeral(true))).await;
                 } else if let Some(target) = cmd.data.custom_id.strip_prefix("no:") {
                     let _ = self.tx.send(AppEvent::Cancel { target: target.into(), author }).await;
-                    let _ = cmd.create_response(&ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content("🚫 Cancelling...").ephemeral(true))).await;
+                    let _ = msg.edit(&ctx, EditMessage::new().components(vec![])).await;
+                    let _ = cmd.create_response(&ctx, CreateInteractionResponse::Acknowledge).await;
                 }
             }
             _ => {}
@@ -69,7 +71,7 @@ impl Discord {
 #[::async_trait::async_trait]
 impl Driver for Discord {
     async fn notify(&self, p: &Proposal) -> Result<()> {
-        let ch = if p.origin == Platform::Discord { ChannelId::new(p.channel.parse()?) } else { self.log };
+        let ch = if p.origin == Platform::Discord { ChannelId::new(p.channel.parse().unwrap_or(self.log.get())) } else { self.log };
         let embed = CreateEmbed::new().title(format!("{} Proposal", p.action))
             .field("Target", format!("<@{}>", p.target.discord.as_deref().unwrap_or(&p.target.raw)), true)
             .field("Reason", &p.reason, false)
@@ -81,14 +83,16 @@ impl Driver for Discord {
     }
 
     async fn execute(&self, p: &Proposal, app: &str) -> Result<()> {
-        let ch = if p.origin == Platform::Discord { ChannelId::new(p.channel.parse()?) } else { self.log };
+        let ch = if p.origin == Platform::Discord { ChannelId::new(p.channel.parse().unwrap_or(self.log.get())) } else { self.log };
         if let Some(did) = &p.target.discord {
-            let uid = UserId::new(did.parse()?);
-            if let Ok(c) = ch.to_channel(&self.http).await {
-                if let Some(g) = c.guild() {
-                    let audit = format!("Req: {} App: {}", p.author, app);
-                    if p.action == "ban" { let _ = g.guild_id.ban_with_reason(&self.http, uid, 0, &audit).await; }
-                    if p.action == "kick" { let _ = g.guild_id.kick_with_reason(&self.http, uid, &audit).await; }
+            if let Ok(uid_val) = did.parse::<u64>() {
+                if let Ok(c) = ch.to_channel(&self.http).await {
+                    if let Some(g) = c.guild() {
+                        let audit = format!("Req: {} App: {}", p.author, app);
+                        let uid = UserId::new(uid_val);
+                        if p.action == "ban" { let _ = g.guild_id.ban_with_reason(&self.http, uid, 0, &audit).await; }
+                        if p.action == "kick" { let _ = g.guild_id.kick_with_reason(&self.http, uid, &audit).await; }
+                    }
                 }
             }
         }
@@ -97,7 +101,7 @@ impl Driver for Discord {
     }
 
     async fn discard(&self, p: &Proposal, reason: &str) -> Result<()> {
-        let ch = if p.origin == Platform::Discord { ChannelId::new(p.channel.parse()?) } else { self.log };
+        let ch = if p.origin == Platform::Discord { ChannelId::new(p.channel.parse().unwrap_or(self.log.get())) } else { self.log };
         let _ = ch.say(&self.http, format!("🚫 {} proposal for {} discarded: {}", p.action, p.target.raw, reason)).await;
         Ok(())
     }

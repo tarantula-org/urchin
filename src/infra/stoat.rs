@@ -17,12 +17,17 @@ pub struct Stoat {
 impl Stoat {
     pub async fn new(token: &str, log: &str, staff: &str, tx: mpsc::Sender<Event>, config: Arc<AppConfig>) -> Result<Self> {
         let http = Client::builder().user_agent("Urchin").danger_accept_invalid_certs(true).build()?;
-        let props = Arc::new(RwLock::new(HashMap::new()));
         
-        let (tk, ht, st, pr, txc, cfg) = (token.to_string(), http.clone(), staff.to_string(), props.clone(), tx, config);
+        let me_res = http.get("https://stoat.chat/api/users/@me").header("x-bot-token", token).send().await?.error_for_status()?;
+        let me: Value = me_res.json().await?;
+        let my_id = me["_id"].as_str().context("Failed to get bot ID")?.to_string();
+
+        let props = Arc::new(RwLock::new(HashMap::new()));
+        let (tk, ht, st, pr, txc, cfg, bot_id) = (token.to_string(), http.clone(), staff.to_string(), props.clone(), tx, config, my_id);
+        
         ::tokio::spawn(async move {
             loop {
-                if let Err(e) = Self::listen(&ht, &tk, &st, &txc, &pr, &cfg).await { ::tracing::error!("Stoat WS: {}", e); }
+                if let Err(e) = Self::listen(&ht, &tk, &st, &bot_id, &txc, &pr, &cfg).await { ::tracing::error!("Stoat WS: {}", e); }
                 ::tokio::time::sleep(::std::time::Duration::from_secs(5)).await;
             }
         });
@@ -30,7 +35,7 @@ impl Stoat {
         Ok(Self { http, token: token.into(), log: log.into(), props })
     }
 
-    async fn listen(http: &Client, tk: &str, staff: &str, tx: &mpsc::Sender<Event>, props: &Arc<RwLock<HashMap<::std::string::String, ::std::string::String>>>, cfg: &Arc<AppConfig>) -> Result<()> {
+    async fn listen(http: &Client, tk: &str, staff: &str, bot_id: &str, tx: &mpsc::Sender<Event>, props: &Arc<RwLock<HashMap<::std::string::String, ::std::string::String>>>, cfg: &Arc<AppConfig>) -> Result<()> {
         let tls = ::native_tls::TlsConnector::builder().danger_accept_invalid_certs(true).build()?;
         let (ws, _) = ::tokio_tungstenite::connect_async_tls_with_config("wss://stoat.chat/events", None, false, Some(::tokio_tungstenite::Connector::NativeTls(tls))).await?;
         let (mut w, mut r) = ws.split();
@@ -45,7 +50,7 @@ impl Stoat {
                     let pl: Value = ::serde_json::from_str(&msg.context("WS End")??.into_text()?)?;
                     match pl["type"].as_str() {
                         Some("Authenticated") => { w.send(::tokio_tungstenite::tungstenite::Message::Text(json!({"type": "UpdateUser", "data": {"status": {"presence": "Online"}}}).to_string())).await?; }
-                        Some("MessageReact") => { Self::on_react(&pl, http, tk, staff, tx, props).await?; }
+                        Some("MessageReact") => { Self::on_react(&pl, http, tk, staff, bot_id, tx, props).await?; }
                         Some("Message") => { Self::on_msg(&pl, &cfg.command_prefix, tx).await?; }
                         _ => {}
                     }
@@ -70,12 +75,14 @@ impl Stoat {
         Ok(())
     }
 
-    async fn on_react(pl: &Value, http: &Client, tk: &str, staff: &str, tx: &mpsc::Sender<Event>, props: &Arc<RwLock<HashMap<::std::string::String, ::std::string::String>>>) -> Result<()> {
+    async fn on_react(pl: &Value, http: &Client, tk: &str, staff: &str, bot_id: &str, tx: &mpsc::Sender<Event>, props: &Arc<RwLock<HashMap<::std::string::String, ::std::string::String>>>) -> Result<()> {
         let is_ok = pl["emoji_id"].as_str().is_some_and(|e| e.contains('✅'));
         let is_no = pl["emoji_id"].as_str().is_some_and(|e| e.contains('❌'));
         if !is_ok && !is_no { return Ok(()); }
 
         let uid = pl["user_id"].as_str().context("Missing user_id")?;
+        if uid == bot_id { return Ok(()); } 
+
         let mid = pl["id"].as_str().context("Missing id")?;
         let cid = pl["channel_id"].as_str().context("Missing channel_id")?;
         
@@ -86,7 +93,10 @@ impl Stoat {
         if mem["roles"].as_array().is_some_and(|r| r.iter().any(|v| v.as_str() == Some(staff))) {
             if let Some(target) = props.read().await.get(mid) {
                 if is_ok { tx.send(Event::Approve { target: target.clone(), approver: uid.into() }).await?; }
-                if is_no { tx.send(Event::Cancel { target: target.clone(), author: uid.into() }).await?; }
+                if is_no { 
+                    tx.send(Event::Cancel { target: target.clone(), author: uid.into() }).await?; 
+                    let _ = http.delete(format!("https://stoat.chat/api/channels/{}/messages/{}", cid, mid)).header("x-bot-token", tk).send().await;
+                }
             }
         }
         Ok(())
@@ -98,7 +108,7 @@ impl Driver for Stoat {
     async fn notify(&self, p: &Proposal) -> Result<()> {
         let ch = if p.origin == Platform::Stoat { &p.channel } else { &self.log };
         let msg = format!("**TPI {}**\nTarget: {}\nReq: {}\nReason: {}\n_React ✅ to approve, ❌ to cancel_", p.action, p.target.stoat.as_deref().unwrap_or(&p.target.raw), p.author, p.reason);
-        let res: Value = self.http.post(format!("https://stoat.chat/api/channels/{}/messages", ch)).header("x-bot-token", &self.token).json(&json!({"content": msg})).send().await?.json().await?;
+        let res: Value = self.http.post(format!("https://stoat.chat/api/channels/{}/messages", ch)).header("x-bot-token", &self.token).json(&json!({"content": msg})).send().await?.error_for_status()?.json().await?;
         
         if let Some(id) = res["_id"].as_str() {
             let _ = self.http.put(format!("https://stoat.chat/api/channels/{}/messages/{}/reactions/✅", ch, id)).header("x-bot-token", &self.token).send().await;
@@ -110,13 +120,13 @@ impl Driver for Stoat {
 
     async fn execute(&self, p: &Proposal, app: &str) -> Result<()> {
         let ch = if p.origin == Platform::Stoat { &p.channel } else { &self.log };
-        self.http.post(format!("https://stoat.chat/api/channels/{}/messages", ch)).header("x-bot-token", &self.token).json(&json!({"content": format!("✅ Executed {} on {} (App: {})", p.action, p.target.raw, app)})).send().await?;
+        self.http.post(format!("https://stoat.chat/api/channels/{}/messages", ch)).header("x-bot-token", &self.token).json(&json!({"content": format!("✅ Executed {} on {} (App: {})", p.action, p.target.raw, app)})).send().await?.error_for_status()?;
         Ok(())
     }
 
     async fn discard(&self, p: &Proposal, reason: &str) -> Result<()> {
         let ch = if p.origin == Platform::Stoat { &p.channel } else { &self.log };
-        self.http.post(format!("https://stoat.chat/api/channels/{}/messages", ch)).header("x-bot-token", &self.token).json(&json!({"content": format!("🚫 {} discarded: {}", p.action, reason)})).send().await?;
+        self.http.post(format!("https://stoat.chat/api/channels/{}/messages", ch)).header("x-bot-token", &self.token).json(&json!({"content": format!("🚫 {} discarded: {}", p.action, reason)})).send().await?.error_for_status()?;
         Ok(())
     }
 }
